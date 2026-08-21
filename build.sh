@@ -5,12 +5,12 @@
 #   2) 与 repo 内 latest_version 比对；相同则跳过
 #   3) 新版 → 克隆上游源码 → 交叉编译 arm64 静态二进制
 #   4) 用 module-src/ 模板组装 Magisk/KernelSU 模块 zip
-#   5) 更新 latest_version + update.json 并推送回本 repo
-#   6) 用 GitHub API 创建同名 release 并上传模块 zip
+#   5) 更新 latest_version + update.json 并推送回本 repo（尽力）
+#   6) 用 GitHub API 创建/复用 release 并上传模块 zip
 set -e
 
 UPSTREAM="router-for-me/CLIProxyAPI"
-REPO_ROOT="$(pwd)"                     # Actions checkout 根
+REPO_ROOT="$(pwd)"
 OWNER=$(echo "$GITHUB_REPOSITORY" | cut -d/ -f1)
 REPO_NAME=$(echo "$GITHUB_REPOSITORY" | cut -d/ -f2)
 THIS_REPO="${OWNER}/${REPO_NAME}"
@@ -18,26 +18,34 @@ API="https://api.github.com"
 GH_TOKEN="${GITHUB_TOKEN}"
 [ -z "$GH_TOKEN" ] && { echo "!! 无 GITHUB_TOKEN"; exit 1; }
 
-CUR=""; [ -f latest_version ] && CUR=$(cat latest_version)
-echo ">> 本仓库: $THIS_REPO   当前已构建: ${CUR:-<无>}"
+# 用 python3 解析 JSON（runner 必有 python3，比 jq 稳）
+jget(){ python3 -c "import json,sys; d=json.load(sys.stdin); print(d$1)" 2>/dev/null; }
+
+CUR=""; [ -f latest_version ] && CUR=$(cat latest_version 2>/dev/null)
+echo ">> 本仓库: $THIS_REPO   当前已构建版本: ${CUR:-<无>}"
 
 # 1) 上游最新 tag
-TAG=$(curl -fsS -m 30 "$API/repos/$UPSTREAM/releases/latest" | jq -r '.tag_name' 2>/dev/null | sed 's/^v//')
-if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
-  echo "!! 无法获取上游 release，跳过"; exit 0
-fi
+RAW=$(curl -fsS -m 30 "$API/repos/$UPSTREAM/releases/latest" 2>/dev/null)
+TAG=$( [ -n "$RAW" ] && python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("tag_name",""))' "$RAW" 2>/dev/null | sed 's/^v//' )
+[ "$TAG" = "" ] && { echo "!! 无法获取上游 release，跳过"; exit 0; }
 echo ">> 上游最新: v$TAG"
 
-# 2) 无更新 → 跳过
-if [ -n "$CUR" ] && [ "$CUR" = "$TAG" ]; then echo ">> 已是最新 v$TAG"; exit 0; fi
-echo ">> 检测到新版 $CUR -> $TAG，开始构建 ..."
+# 2) 无更新 → 退出
+if [ -n "$CUR" ] && [ "$CUR" = "$TAG" ]; then echo ">> 已是最新 v$TAG，无需重建"; exit 0; fi
+echo ">> 检测到新版: ${CUR:-<none>} -> $TAG，开始构建 ..."
 
-# 3) 工具链
-echo ">> 准备 Go 工具链"
-apt-get update -y >/dev/null 2>&1 || true
-apt-get install -y golang-go jq >/dev/null 2>&1 || true
+# 3) 准备 Go 工具链（先 apt，失败则下载官方 go1.26 增量包）
 export GOTOOLCHAIN=auto GOOS=linux GOARCH=arm64 CGO_ENABLED=0
-go version >/dev/null 2>&1 || true
+command -v go >/dev/null 2>&1 || { apt-get update -y >/dev/null 2>&1; apt-get install -y golang-go >/dev/null 2>&1; }
+if ! command -v go >/dev/null 2>&1; then
+  echo "   - 下载官方 Go 工具链 (go1.26.0, linux-x86_64) ..."
+  curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.26.0.linux-x86_64.tar.gz" || exit 1
+  tar -C /tmp -xzf /tmp/go.tgz 2>/dev/null || exit 1
+  export PATH="/tmp/go/bin:$PATH"
+  export GOROOT=/tmp/go
+fi
+GV=$(go version 2>&1); echo "   >> go: $GV"
+echo "$GV" | grep -q 'go1\.' || { echo "!! go 工具链不可用"; exit 1; }
 
 # 4) 克隆上游 + 交叉编译
 WORK=/tmp/cpa_work
@@ -49,43 +57,43 @@ cd src
 echo ">> 交叉编译 arm64 静态二进制 ..."
 go build -buildvcs=false -trimpath \
   -ldflags "-s -w -X 'main.Version=${TAG}-android' -X 'main.Commit=auto-build' -X 'main.BuildDate=$(date +%F)'" \
-  -o /tmp/cpa_module/bin/cli-proxy-api ./cmd/server/ 2>&1 | tail -20
-[ -s /tmp/cpa_module/bin/cli-proxy-api ] || { echo "!! 编译失败"; exit 1; }
+  -o /tmp/cpa_module/bin/cli-proxy-api ./cmd/server/ 2>&1 | tail -25
+if [ ! -s /tmp/cpa_module/bin/cli-proxy-api ]; then echo "!! 编译失败"; exit 1; fi
+echo "   二进制: $(du -h /tmp/cpa_module/bin/cli-proxy-api | cut -f1)"
 cd "$WORK"
 
 # 5) 组装模块
-echo ">> 组装模块"
+echo ">> 组装模块 (从 module-src 模板)"
 cp -a "$REPO_ROOT/module-src/." /tmp/cpa_module/
 VER=$(printf '%03d%03d%03d' $(echo "$TAG" | tr '.' ' '))
 for f in module.prop README.md update.conf; do
   p="/tmp/cpa_module/$f"; [ -f "$p" ] || continue
-  sed -i "s/__VERSION__/$TAG/g; s/__VERSIONCODE__/$VER/g; s#__REPO__#$THIS_REPO#g" "$p"
+  sed -i "s/__VERSION__/$TAG/g; s/__VERSIONCODE__/$VER/g; s#__MODULE_REPO__#$THIS_REPO#g; s#__REPO__#$THIS_REPO#g" "$p"
 done
-# 加 update.json（供 Magisk 应用内检测）
 cat > /tmp/cpa_module/update.json <<EOF
 {
   "version": "v$TAG",
-  "versionCode": ${VER},
+  "versionCode": $VER,
   "zipUrl": "https://github.com/$THIS_REPO/releases/download/v$TAG/CLIProxyAPI-magisk-v$TAG-arm64.zip",
   "changelog": "https://github.com/$THIS_REPO/releases/tag/v$TAG"
 }
 EOF
 
-# 6) 打包 zip（模块根结构）
-ZIPNAME="CLIProxyAPI-magisk-v${TAG}-arm64.zip"
-python3 - "$ZIPNAME" <<'PYZ'
+# 6) 打包 zip
+ZIPNS="CLIProxyAPI-magisk-v$TAG-arm64.zip"
+python3 - "$ZIPNS" <<'PYZ'
 import zipfile, os, sys
 name=sys.argv[1]; root="/tmp/cpa_module"; out="/tmp/"+name
 if os.path.exists(out): os.remove(out)
 z=zipfile.ZipFile(out,"w",zipfile.ZIP_DEFLATED,9)
 for r,_,fs in os.walk(root):
     for f in fs:
-        p=os.path.join(r,f); z.write(p, os.path.relpath(p,root))
+        p=os.path.join(r,f); z.write(p,os.path.relpath(p,root))
 z.close()
 PYZ
-echo ">> zip 就绪: $ZIPNAME ($(du -h "/tmp/$ZIPNAME" | cut -f1))"
+echo ">> zip 就绪: $ZIPNS ($(du -h "/tmp/$ZIPNS" | cut -f1))"
 
-# 7) 本地更新标记文件，并在 Actions 内推送
+# 7) 提交最新版本标记并尽力推送
 echo "$TAG" > "$REPO_ROOT/latest_version"
 cp /tmp/cpa_module/update.json "$REPO_ROOT/update.json"
 cd "$REPO_ROOT"
@@ -93,25 +101,25 @@ git config user.email "actions@github.com" 2>/dev/null || true
 git config user.name "github-actions" 2>/dev/null || true
 git add latest_version update.json 2>/dev/null
 git commit -m "chore: built module for v$TAG" 2>/dev/null || true
-git push --force "https://x-access-token:${GH_TOKEN}@github.com/${THIS_REPO}.git" HEAD:$(git branch --show-current 2>/dev/null || echo main) >/dev/null 2>&1 || true
+BR=$(git branch --show-current 2>/dev/null || echo main)
+git push --force "https://x-access-token:${GH_TOKEN}@github.com/${THIS_REPO}.git" "HEAD:$BR" >/dev/null 2>&1 || true
 
-# 8) 创建/复用 release + 上传 zip 资产（重复 tag 安全）
+# 8) 创建/复用 release + 上传 zip
 echo ">> 准备 release v$TAG"
-# 若该 tag 已有 release 则直接取 id，否则新建
-RID=$(curl -fsS -m 30 "$API/repos/$THIS_REPO/releases/tags/v$TAG" \
-  -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" | jq -r '.id' 2>/dev/null)
-if [ -z "$RID" ] || [ "$RID" = "null" ]; then
+RID=$(curl -fsS -m 30 "$API/repos/$THIS_REPO/releases/tags/v$TAG" -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" 2>/dev/null | jget "['id']")
+if [ -z "$RID" ]; then
   RID=$(curl -fsS -X POST \
     -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json" \
     -d "{\"tag_name\":\"v$TAG\",\"name\":\"v$TAG\",\"body\":\"CLIProxyAPI Magisk/KernelSU 模块 (v$TAG, GitHub Actions 自动构建)\",\"draft\":false,\"prerelease\":false}" \
-    "$API/repos/$THIS_REPO/releases" | jq -r '.id')
+    "$API/repos/$THIS_REPO/releases" 2>/dev/null | jget "['id']")
 fi
+[ -z "$RID" ] && { echo "!! 创建/查找 release 失败"; exit 1; }
 echo "   release id=$RID"
-# 若资产尚未上传才上传
-REUSE=$(curl -fsS -m 30 "$API/repos/$THIS_REPO/releases/$RID" \
-  -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" | jq -e --arg n "$ZIPNAME" '.assets[]|select(.name==$n)' 2>/dev/null)
-[ -z "$REUSE" ] && curl -fsS -X POST \
-  -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "Content-Type: application/octet-stream" \
-  --data-binary "@/tmp/$ZIPNAME" \
-  "$API/repos/$THIS_REPO/releases/$RID/assets?name=$ZIPNAME" >/dev/null && echo "   资产上传成功"
+HAS=$(curl -fsS -m 20 "$API/repos/$THIS_REPO/releases/$RID" -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(1 if any(a.get('name')=='$ZIPNS' for a in d.get('assets',[])) else 0)")
+if [ "$HAS" != "1" ]; then
+  curl -fsS -X POST \
+    -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "Content-Type: application/octet-stream" \
+    --data-binary "@/tmp/$ZIPNS" \
+    "$API/repos/$THIS_REPO/releases/$RID/assets?name=$ZIPNS" && echo "   资产上传成功"
+fi
 echo ">> 完成 v$TAG"
