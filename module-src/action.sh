@@ -9,7 +9,10 @@ MODDIR=${0%/*}
 BIN="$MODDIR/bin/cli-proxy-api"
 CONFIG="$MODDIR/config.yaml"
 LOG="$MODDIR/logs/service.log"
-mkdir -p "$MODDIR/logs" 2>/dev/null
+# 与 service.sh 一致：模块自带数据目录作为 HOME（Android 上通常无 $HOME）
+HOMEDIR="$MODDIR/data"
+mkdir -p "$MODDIR/logs" "$HOMEDIR" 2>/dev/null
+export HOME="$HOMEDIR"
 
 is_run() { pidof cli-proxy-api >/dev/null 2>&1; }
 

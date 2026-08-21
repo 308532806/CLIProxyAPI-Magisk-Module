@@ -73,8 +73,8 @@ AI CLI / 客户端把 API base 指向：
 可直接编辑该文件更换解析。
 
 ## 卸载
-模块卡片 → 删除。登录凭证 `/root/.cli-proxy-api` 不会自动删除，需手动
-`rm -rf /root/.cli-proxy-api`。
+登录凭证（模块 data 目录）不会随卸载删除；若需彻底清除：
+`rm -rf /data/adb/modules/cliproxyapi/data`
 
 ## 构建
 - 二进制自 GitHub 源码 + 依赖静态交叉编译（`CGO_ENABLED=0 GOARCH=arm64`），不随官方 glibc 版
