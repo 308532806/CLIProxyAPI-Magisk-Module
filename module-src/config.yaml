@@ -29,9 +29,11 @@ auth-dir: "~/.cli-proxy-api"
 # 代理接入鉴权 Keys(可选)。留空 = 本机免鉴权。
 api-keys: []
 
-# 动态插件(默认关闭)
+# 动态插件：官方默认关闭（插件是进程内执行的受信任动态库）。
+# 如需要使用插件商店/插件功能，保持 enabled: true；
+# 安全敏感场景可改回 false。
 plugins:
-  enabled: false
+  enabled: true
   configs: {}
 
 debug: false
