@@ -22,14 +22,60 @@ until [ "$(getprop sys.boot_completed)" = "1" ]; do
   sleep 2
 done
 
-# DNS 兜底：若系统 resolv.conf 缺失/为空/不可用，则挂载模块自带的 resolver（单文件 bind）
-if [ -f "$MODDIR/resolv.conf" ] && [ -s "$MODDIR/resolv.conf" ]; then
-  # 系统解析配置若缺失或明显不可用(仅为回环 stub)才覆盖
-  if [ ! -s /etc/resolv.conf ] || grep -qE '^nameserver[[:space:]]+(\[?::|127\.0\.0\.1)' /etc/resolv.conf 2>/dev/null; then
-    mount --bind "$MODDIR/resolv.conf" /etc/resolv.conf 2>/dev/null && \
-      echo "$(date '+%F %T') resolv.conf DNS 兜底已挂载" >> "$LOG"
+# ===== Android 平台 DNS+CA 固化（Go 静态二进制必需，每台设备都要）=====
+# Android 上 /etc -> /system/etc 且 /system 只读：
+#   1) /etc/resolv.conf 不存在 → Go 静态二进制回退 [::1]:53 stub → DNS 全挂
+#   2) /etc/ssl/certs/ca-certificates.crt 不存在 → Go x509 校验失败 → TLS 全挂
+# 方案：overlay 挂载 /system/etc（upper 持久存于模块内），写入 resolv.conf + 合并 CA。
+OVLDIR="$MODDIR/ovl"
+OVL_UP="$OVLDIR/up"
+OVL_WORK="$OVLDIR/work"
+dns_fixed=0
+ca_fixed=0
+
+# 检查 resolv.conf 是否有效（缺失 / 空 / 仅回环 stub 视为无效）
+chk_dns() {
+  [ -s /system/etc/resolv.conf ] || return 1
+  ! grep -qE '^nameserver[[:space:]]+(\[?::|127\.0\.0\.1)' /system/etc/resolv.conf 2>/dev/null
+}
+# 检查 CA 证书库是否已合并
+chk_ca() {
+  [ -s /system/etc/ssl/certs/ca-certificates.crt ] 2>/dev/null
+}
+
+if ! chk_dns || ! chk_ca; then
+  # 若尚未 overlay，则挂载 /system/etc（upper 持久，重启后可复用）
+  if ! mount | grep -q " overlay /system/etc"; then
+    mkdir -p "$OVL_UP" "$OVL_WORK" 2>/dev/null
+    if mount -t overlay -o "lowerdir=/system/etc,upperdir=$OVL_UP,workdir=$OVL_WORK" overlay /system/etc 2>/dev/null; then
+      echo "$(date '+%F %T') overlay /system/etc 已挂载（DNS/CA 固化）" >> "$LOG"
+    else
+      echo "$(date '+%F %T') !! overlay 挂载失败，尝试 bind 兜底" >> "$LOG"
+      # 兜底：直接 bind 模块 resolv.conf（若目标可写）
+      [ -f "$MODDIR/resolv.conf" ] && mount --bind "$MODDIR/resolv.conf" /system/etc/resolv.conf 2>/dev/null
+    fi
+  fi
+
+  # DNS：写入有效 resolver
+  if ! chk_dns && [ -f "$MODDIR/resolv.conf" ] && [ -s "$MODDIR/resolv.conf" ]; then
+    if cp -f "$MODDIR/resolv.conf" /system/etc/resolv.conf 2>/dev/null; then
+      echo "$(date '+%F %T') DNS 固化：写入 resolv.conf ($(tr '\n' ' ' < "$MODDIR/resolv.conf"))" >> "$LOG"
+    else
+      echo "$(date '+%F %T') !! DNS 写入失败" >> "$LOG"
+    fi
+  fi
+
+  # CA：把系统证书合并到 Go 默认查找路径
+  if ! chk_ca; then
+    mkdir -p /system/etc/ssl/certs 2>/dev/null
+    if cat /system/etc/security/cacerts/* > /system/etc/ssl/certs/ca-certificates.crt 2>/dev/null && chk_ca; then
+      echo "$(date '+%F %T') CA 固化：合并 $(ls /system/etc/security/cacerts/ 2>/dev/null | wc -l) 个根证书 → ca-certificates.crt" >> "$LOG"
+    else
+      echo "$(date '+%F %T') !! CA 合并失败" >> "$LOG"
+    fi
   fi
 fi
+# ===== DNS+CA 固化结束 =====
 
 # 若开启自动更新，先异步检查并应用新模块版（失败不阻塞启动）
 CF_AUTO=0
