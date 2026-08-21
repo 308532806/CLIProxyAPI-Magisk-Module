@@ -104,7 +104,7 @@ git commit -m "chore: built module for v$TAG" 2>/dev/null || true
 BR=$(git branch --show-current 2>/dev/null || echo main)
 git push --force "https://x-access-token:${GH_TOKEN}@github.com/${THIS_REPO}.git" "HEAD:$BR" >/dev/null 2>&1 || true
 
-# 8) 创建/复用 release + 上传 zip
+# 8) 创建/复用 release + 上传 zip（资产必须 POST 到 uploads.github.com）
 echo ">> 准备 release v$TAG"
 RID=$(curl -fsS -m 30 "$API/repos/$THIS_REPO/releases/tags/v$TAG" -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" 2>/dev/null | jget "['id']")
 if [ -z "$RID" ]; then
@@ -117,9 +117,11 @@ fi
 echo "   release id=$RID"
 HAS=$(curl -fsS -m 20 "$API/repos/$THIS_REPO/releases/$RID" -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(1 if any(a.get('name')=='$ZIPNS' for a in d.get('assets',[])) else 0)")
 if [ "$HAS" != "1" ]; then
-  curl -fsS -X POST \
+  echo "   上传资产到 uploads.github.com ..."
+  curl -fsS -X POST -m 600 \
     -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "Content-Type: application/octet-stream" \
     --data-binary "@/tmp/$ZIPNS" \
-    "$API/repos/$THIS_REPO/releases/$RID/assets?name=$ZIPNS" && echo "   资产上传成功"
+    "https://uploads.github.com/repos/$THIS_REPO/releases/$RID/assets?name=$ZIPNS" >/dev/null || { echo "!! 资产上传失败"; exit 1; }
+  echo "   资产上传成功"
 fi
 echo ">> 完成 v$TAG"
