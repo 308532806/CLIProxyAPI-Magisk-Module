@@ -1,0 +1,42 @@
+# CLIProxyAPI 模块默认配置
+# 修改后重启模块生效，或在 Magisk 卡片点闪电按钮停止再启动
+# 本服务在 arm64 已 root 设备上以 root 身份运行于 127.0.0.1:8317
+
+# 监听地址：0.0.0.0 = 绑定所有接口，允许局域网内其它设备(如电脑/另一台手机)使用本机做代理。
+# 局域网共享请在下面设置 api-keys 鉴权，避免被同网段他人滥用。
+# 如只想本机访问，改为: host: "127.0.0.1"
+host: "0.0.0.0"
+
+# 服务端口
+port: 8317
+
+# TLS(可选)，关闭即可
+tls:
+  enable: false
+  cert: ""
+  key: ""
+
+# 远程管理 API
+remote-management:
+  allow-remote: false
+  secret-key: ""
+
+# 登录令牌/凭证存放目录 (OAuth 登录 & token 存储于此)
+auth-dir: "~/.cli-proxy-api"
+
+# 代理接入鉴权 Keys(可选)。留空 = 本机免鉴权。
+api-keys: []
+
+# 动态插件(默认关闭)
+plugins:
+  enabled: false
+  configs: {}
+
+debug: false
+commercial-mode: false
+
+# 后台运行，日志写入文件(位于模块 logs 目录)
+logging-to-file: true
+logs-max-total-size-mb: 20
+
+usage-statistics-enabled: false

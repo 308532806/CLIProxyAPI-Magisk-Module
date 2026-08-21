@@ -1,0 +1,8 @@
+id=cliproxyapi
+name=CLIProxyAPI (AI CLI 局域网代理)
+version=v__VERSION__
+versionCode=__VERSIONCODE__
+author=router-for-me
+description=为 AI CLI（Codex / Claude Code / Gemini CLI 等）提供 OpenAI/Claude/Gemini 兼容代理 API 的本地服务。开机自启于 0.0.0.0:8317，局域网设备可访问；兼容 Magisk / KernelSU / APatch，支持自动检测上游新版并更新。仅支持已 root 的 arm64（64 位）安卓设备。
+minMagisk=20400
+updateJson=https://raw.githubusercontent.com/__REPO__/main/update.json
