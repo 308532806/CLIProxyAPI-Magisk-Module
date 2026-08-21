@@ -1,6 +1,6 @@
 # CLIProxyAPI 模块默认配置
 # 修改后重启模块生效，或在 Magisk 卡片点闪电按钮停止再启动
-# 本服务在 arm64 已 root 设备上以 root 身份运行于 127.0.0.1:8317
+# 本服务在 arm64 已 root 设备上以 root 身份运行于 0.0.0.0:8317
 
 # 监听地址：0.0.0.0 = 绑定所有接口，允许局域网内其它设备(如电脑/另一台手机)使用本机做代理。
 # 局域网共享请在下面设置 api-keys 鉴权，避免被同网段他人滥用。
@@ -17,9 +17,11 @@ tls:
   key: ""
 
 # 远程管理 API
+# allow-remote: 允许局域网内其它设备访问管理面板/API（配合 secret-key 鉴权）
+# secret-key: 管理密钥（面板登录与管理 API 使用）。默认 admin，建议修改。
 remote-management:
-  allow-remote: false
-  secret-key: ""
+  allow-remote: true
+  secret-key: "admin"
 
 # 登录令牌/凭证存放目录 (OAuth 登录 & token 存储于此)
 auth-dir: "~/.cli-proxy-api"

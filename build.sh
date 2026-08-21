@@ -18,8 +18,15 @@ API="https://api.github.com"
 GH_TOKEN="${GITHUB_TOKEN}"
 [ -z "$GH_TOKEN" ] && { echo "!! 无 GITHUB_TOKEN"; exit 1; }
 
-# 用 python3 解析 JSON（runner 必有 python3，比 jq 稳）
-jget(){ python3 -c "import json,sys; d=json.load(sys.stdin); print(d$1)" 2>/dev/null; }
+# 用 python3 解析 JSON（runner 必有 python3，比 jq 稳；容错：空输入/异常输出空且 exit 0）
+jget(){ python3 -c "
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    print(d$1)
+except Exception:
+    pass
+" 2>/dev/null; }
 
 CUR=""; [ -f latest_version ] && CUR=$(cat latest_version 2>/dev/null)
 echo ">> 本仓库: $THIS_REPO   当前已构建版本: ${CUR:-<无>}"
@@ -106,19 +113,27 @@ git push --force "https://x-access-token:${GH_TOKEN}@github.com/${THIS_REPO}.git
 
 # 8) 创建/复用 release + 上传 zip（资产必须 POST 到 uploads.github.com）
 echo ">> 准备 release v$TAG"
-RID=$(curl -fsS -m 30 "$API/repos/$THIS_REPO/releases/tags/v$TAG" -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" 2>/dev/null | jget "['id']")
+RID=""; RAW=""
+# 先查是否已有该 tag 的 release（404=无，正常；不用 -f 避免空输出崩 set -e）
+RAW=$(curl -sS -m 30 -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+  "$API/repos/$THIS_REPO/releases/tags/v$TAG" 2>/dev/null || true)
+if [ -n "$RAW" ]; then RID=$(echo "$RAW" | jget "['id']"); fi
 if [ -z "$RID" ]; then
-  RID=$(curl -fsS -X POST \
+  RAW=$(curl -sS -X POST -m 30 \
     -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json" \
     -d "{\"tag_name\":\"v$TAG\",\"name\":\"v$TAG\",\"body\":\"CLIProxyAPI Magisk/KernelSU 模块 (v$TAG, GitHub Actions 自动构建)\",\"draft\":false,\"prerelease\":false}" \
-    "$API/repos/$THIS_REPO/releases" 2>/dev/null | jget "['id']")
+    "$API/repos/$THIS_REPO/releases" 2>/dev/null || true)
+  RID=$(echo "$RAW" | jget "['id']")
 fi
-[ -z "$RID" ] && { echo "!! 创建/查找 release 失败"; exit 1; }
+if [ -z "$RID" ]; then
+  echo "!! 创建/查找 release 失败（响应: $(echo "$RAW" | head -c 300)）"
+  exit 1
+fi
 echo "   release id=$RID"
-HAS=$(curl -fsS -m 20 "$API/repos/$THIS_REPO/releases/$RID" -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(1 if any(a.get('name')=='$ZIPNS' for a in d.get('assets',[])) else 0)")
+HAS=$(curl -sS -m 20 "$API/repos/$THIS_REPO/releases/$RID" -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(1 if any(a.get('name')=='$ZIPNS' for a in d.get('assets',[])) else 0)" 2>/dev/null || echo 0)
 if [ "$HAS" != "1" ]; then
   echo "   上传资产到 uploads.github.com ..."
-  curl -fsS -X POST -m 600 \
+  curl -sS -X POST -m 600 \
     -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "Content-Type: application/octet-stream" \
     --data-binary "@/tmp/$ZIPNS" \
     "https://uploads.github.com/repos/$THIS_REPO/releases/$RID/assets?name=$ZIPNS" >/dev/null || { echo "!! 资产上传失败"; exit 1; }
