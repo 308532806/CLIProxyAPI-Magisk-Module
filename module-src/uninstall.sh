@@ -8,9 +8,11 @@ if [ -n "$PIDS" ]; then
   kill $PIDS 2>/dev/null
 fi
 
-# 解除 DNS/CA 固化的 overlay 挂载（若存在）
-UMOUNTED=0
-while mount | grep -q "overlay /system/etc"; do
-  umount /system/etc 2>/dev/null && UMOUNTED=1 || break
-done
-[ "$UMOUNTED" = "1" ] && echo "已解除 /system/etc overlay（DNS/CA 固化）"
+# 解除 DNS/CA 固化的 overlay 挂载（仅当它使用本模块的 upperdir 时）
+# 避免误影响其它模块可能创建的 /system/etc overlay。
+MODDIR=${0%/*}
+OVL_UP="$MODDIR/ovl/up"
+if grep -qE "^[^[:space:]]+[[:space:]]+/system/etc[[:space:]]+overlay" /proc/mounts 2>/dev/null \
+  && mount | grep -Fq "upperdir=$OVL_UP"; then
+  umount /system/etc 2>/dev/null && echo "已解除 CLIProxyAPI 的 /system/etc overlay（DNS/CA 固化）"
+fi

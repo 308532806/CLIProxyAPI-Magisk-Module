@@ -30,22 +30,39 @@ done
 OVLDIR="$MODDIR/ovl"
 OVL_UP="$OVLDIR/up"
 OVL_WORK="$OVLDIR/work"
-dns_fixed=0
-ca_fixed=0
 
 # 检查 resolv.conf 是否有效（缺失 / 空 / 仅回环 stub 视为无效）
 chk_dns() {
   [ -s /system/etc/resolv.conf ] || return 1
   ! grep -qE '^nameserver[[:space:]]+(\[?::|127\.0\.0\.1)' /system/etc/resolv.conf 2>/dev/null
 }
+# Go 的 x509 包可显式读取该文件；同时这也是 Linux 常规默认路径。
+export SSL_CERT_FILE="/system/etc/ssl/certs/ca-certificates.crt"
 # 检查 CA 证书库是否已合并
 chk_ca() {
-  [ -s /system/etc/ssl/certs/ca-certificates.crt ] 2>/dev/null
+  [ -s "$SSL_CERT_FILE" ] 2>/dev/null
+}
+# Android 版本不同，系统 CA 目录可能在 system 或 Conscrypt APEX。
+find_ca_dir() {
+  for d in /system/etc/security/cacerts /apex/com.android.conscrypt/cacerts /apex/com.android.runtime/cacerts; do
+    if [ -d "$d" ] && ls "$d"/* >/dev/null 2>&1; then
+      echo "$d"
+      return 0
+    fi
+  done
+  return 1
+}
+# /proc/mounts 格式固定为：source mountpoint filesystem ...
+# 比解析 mount 命令输出更可靠（Android 常见输出为 "overlay on /system/etc"）。
+is_system_etc_overlay() {
+  grep -qE '^[^[:space:]]+[[:space:]]+/system/etc[[:space:]]+overlay[[:space:]]' /proc/mounts 2>/dev/null
 }
 
 if ! chk_dns || ! chk_ca; then
   # 若尚未 overlay，则挂载 /system/etc（upper 持久，重启后可复用）
-  if ! mount | grep -q " overlay /system/etc"; then
+  if ! is_system_etc_overlay; then
+    # overlay workdir 必须为空；异常关机后先安全重建它，保留上层数据。
+    rm -rf "$OVL_WORK" 2>/dev/null
     mkdir -p "$OVL_UP" "$OVL_WORK" 2>/dev/null
     if mount -t overlay -o "lowerdir=/system/etc,upperdir=$OVL_UP,workdir=$OVL_WORK" overlay /system/etc 2>/dev/null; then
       echo "$(date '+%F %T') overlay /system/etc 已挂载（DNS/CA 固化）" >> "$LOG"
@@ -65,13 +82,19 @@ if ! chk_dns || ! chk_ca; then
     fi
   fi
 
-  # CA：把系统证书合并到 Go 默认查找路径
+  # CA：把 Android 系统证书合并到 Go 默认查找路径（原子替换，避免半写入文件）
   if ! chk_ca; then
+    CA_DIR=$(find_ca_dir)
     mkdir -p /system/etc/ssl/certs 2>/dev/null
-    if cat /system/etc/security/cacerts/* > /system/etc/ssl/certs/ca-certificates.crt 2>/dev/null && chk_ca; then
-      echo "$(date '+%F %T') CA 固化：合并 $(ls /system/etc/security/cacerts/ 2>/dev/null | wc -l) 个根证书 → ca-certificates.crt" >> "$LOG"
+    if [ -n "$CA_DIR" ] \
+      && cat "$CA_DIR"/* > "${SSL_CERT_FILE}.tmp" 2>/dev/null \
+      && [ -s "${SSL_CERT_FILE}.tmp" ] \
+      && mv -f "${SSL_CERT_FILE}.tmp" "$SSL_CERT_FILE" \
+      && chk_ca; then
+      echo "$(date '+%F %T') CA 固化：合并 $(ls "$CA_DIR" 2>/dev/null | wc -l) 个根证书 → ca-certificates.crt" >> "$LOG"
     else
-      echo "$(date '+%F %T') !! CA 合并失败" >> "$LOG"
+      rm -f "${SSL_CERT_FILE}.tmp" 2>/dev/null
+      echo "$(date '+%F %T') !! CA 合并失败（未找到 Android 系统 CA 目录或 overlay 写入失败）" >> "$LOG"
     fi
   fi
 fi

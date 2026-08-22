@@ -43,7 +43,19 @@ AI CLI / 客户端把 API base 指向：
 （Claude / OpenAI / Gemini 兼容端点以 curl `http://<手机IP>:8317/` 返回的 `endpoints` 为准。）
 
 ### 局域网安全
-同 Wi-Fi 下其它人都能访问，请务必在 `config.yaml` 里设置 `api-keys` 鉴权。
+默认管理密钥为 `admin`，仅适合首次部署；请尽快在 `config.yaml` 中修改
+`remote-management.secret-key` 后重启服务。局域网 API 本身也建议配置 `api-keys` 鉴权。
+
+### Antigravity OAuth（订阅版 Gemini）
+面板 → **OAuth 登录** → **开始 Antigravity 登录**。授权链接的回调地址固定为
+`localhost:51121`，因此必须在**运行模块的那台手机本机浏览器**中打开授权链接；
+在另一台电脑打开会回调到电脑自己的 localhost，无法完成。
+
+### 插件商店
+本模块默认 `plugins.enabled: true`，服务端插件商店 API 已启用：
+`GET /v0/management/plugin-store`、`POST /v0/management/plugin-store/:id/install`。
+插件是进程内动态库代码，仅安装可信来源的插件。当前管理面板版本可能没有暴露插件商店导航页；
+此时可通过管理 API 或后续面板更新使用。
 
 ## 更新功能
 
@@ -68,9 +80,18 @@ AI CLI / 客户端把 API base 指向：
   sh action.sh autoupdate off    # 关闭
   ```
 
-## DNS 兜底
-若发现解析不了域名，模块开机时会尝试把自带的 `resolv.conf` 挂载到 `/etc/resolv.conf`，
-可直接编辑该文件更换解析。
+## Android DNS + TLS 证书自动修复
+
+本模块的 Go 二进制是静态构建；Android 通常没有标准 Linux 的 `/etc/resolv.conf` 和
+`/etc/ssl/certs/ca-certificates.crt`，会导致域名解析失败或 TLS 报
+`x509: certificate signed by unknown authority`。
+
+`service.sh` 在每次开机时会自动：
+1. overlay 挂载 `/system/etc`，写入模块自带的有效 `resolv.conf`；
+2. 把 Android 系统 CA 证书合并到 Go 默认读取的 `ca-certificates.crt`；
+3. 设置 `SSL_CERT_FILE`，让服务明确使用该证书库。
+
+该过程幂等，已修复则跳过；模块卸载时会解除本模块创建的 overlay。
 
 ## 卸载
 登录凭证（模块 data 目录）不会随卸载删除；若需彻底清除：

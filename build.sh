@@ -72,7 +72,9 @@ cd "$WORK"
 # 5) 组装模块
 echo ">> 组装模块 (从 module-src 模板)"
 cp -a "$REPO_ROOT/module-src/." /tmp/cpa_module/
+# 固定宽度方便 Magisk 比较；JSON 中必须把前导零去掉（JSON 数字不能有前导零）。
 VER=$(printf '%03d%03d%03d' $(echo "$TAG" | tr '.' ' '))
+VER_JSON=$((10#$VER))
 for f in module.prop README.md update.conf; do
   p="/tmp/cpa_module/$f"; [ -f "$p" ] || continue
   sed -i "s/__VERSION__/$TAG/g; s/__VERSIONCODE__/$VER/g; s#__MODULE_REPO__#$THIS_REPO#g; s#__REPO__#$THIS_REPO#g" "$p"
@@ -80,7 +82,7 @@ done
 cat > /tmp/cpa_module/update.json <<EOF
 {
   "version": "v$TAG",
-  "versionCode": $VER,
+  "versionCode": $VER_JSON,
   "zipUrl": "https://github.com/$THIS_REPO/releases/download/v$TAG/CLIProxyAPI-magisk-v$TAG-arm64.zip",
   "changelog": "https://github.com/$THIS_REPO/releases/tag/v$TAG"
 }

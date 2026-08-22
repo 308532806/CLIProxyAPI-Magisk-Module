@@ -22,6 +22,7 @@
 - **插件商店**：`plugins.enabled: true` 默认开启（官方原版默认关闭）
   - 服务端 API：`GET /v0/management/plugin-store`、`POST /v0/management/plugin-store/:id/install`
   - 经真实设备验证安装 `jshandler` 插件成功
+  - 当前管理面板版本可能未暴露插件商店导航页；这是 UI 限制，不影响服务端商店 API
 - **自带更新能力**：
   - Magisk 应用内「检查更新」（module.prop 的 `updateJson` 指向本仓库）
   - `update.sh`（检测上游版本并就地升级，保留用户 config.yaml）
@@ -51,6 +52,7 @@
 2. 重启后服务自动启动于 `0.0.0.0:8317`
 3. 浏览器打开 `http://<手机IP>:8317/management.html`，管理密钥：`admin`
 4. 在「OAuth 登录」页授权（如 Antigravity = 订阅版 Gemini），或配置 API Key
+   - Antigravity 的回调为 `localhost:51121`，授权链接必须在**运行模块的手机本机浏览器**打开
 5. AI 客户端 API base 指向 `http://<手机IP>:8317`
 
 > 首次打开面板若为空白：强制刷新（浏览器缓存旧面板）。面板文件位于模块 `static/`，可手动替换。
